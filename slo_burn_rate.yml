@@ -1,0 +1,100 @@
+groups:
+  - name: slo_burn_rate
+    interval: 30s
+    rules:
+
+      # ── Fast Burn: 1-hour window (burn_rate > 14.4x) ──────────────────────
+      # Consumes 2% of 30-day error budget in 1 hour
+      - alert: SLOBurnRateFast
+        expr: |
+          (
+            rate(snowflake_pipeline_errors_total[1h])
+            /
+            (rate(snowflake_pipeline_errors_total[1h]) + rate(snowflake_pipeline_rows_processed[1h]) + 0.001)
+          ) / 0.01 > 14.4
+        for: 2m
+        labels:
+          severity: critical
+          window: "1h"
+        annotations:
+          summary: "Fast SLO burn rate on {{ $labels.pipeline_name }}"
+          description: >
+            Pipeline {{ $labels.pipeline_name }} is burning its error budget at
+            {{ $value | printf "%.1f" }}x the sustainable rate (1h window).
+            At this pace, the 30-day budget will be exhausted in
+            {{ printf "%.0f" (div 720.0 $value) }} hours.
+          runbook: "https://wiki.your-org.com/sre/runbooks/burn-rate-fast"
+          dashboard: "http://grafana:3000/d/lakehouse-sre"
+
+      # ── Slow Burn: 6-hour window (burn_rate > 6x) ─────────────────────────
+      # Consumes 5% of 30-day error budget in 6 hours
+      - alert: SLOBurnRateSlow
+        expr: |
+          (
+            rate(snowflake_pipeline_errors_total[6h])
+            /
+            (rate(snowflake_pipeline_errors_total[6h]) + rate(snowflake_pipeline_rows_processed[6h]) + 0.001)
+          ) / 0.01 > 6.0
+        for: 15m
+        labels:
+          severity: warning
+          window: "6h"
+        annotations:
+          summary: "Slow SLO burn rate on {{ $labels.pipeline_name }}"
+          description: >
+            Pipeline {{ $labels.pipeline_name }} burn rate is {{ $value | printf "%.1f" }}x
+            over 6 hours. Error budget degrading — investigate before it escalates.
+          runbook: "https://wiki.your-org.com/sre/runbooks/burn-rate-slow"
+
+      # ── Data Freshness SLO Breach ─────────────────────────────────────────
+      - alert: DataFreshnessBreached
+        expr: snowflake_data_freshness_minutes > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Data freshness SLO breach: {{ $labels.target_table }}"
+          description: >
+            Table {{ $labels.target_table }} on pipeline {{ $labels.pipeline_name }}
+            has not been updated in {{ $value | printf "%.0f" }} minutes
+            (SLO: 30 minutes).
+
+      # ── Pipeline Latency SLO Breach ───────────────────────────────────────
+      - alert: PipelineLatencyBreached
+        expr: >
+          histogram_quantile(0.95, rate(snowflake_pipeline_duration_seconds_bucket{status="SUCCESS"}[5m]))
+          > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Latency SLO breach: {{ $labels.pipeline_name }}"
+          description: >
+            p95 execution time for {{ $labels.pipeline_name }} is
+            {{ $value | printf "%.0f" }}s (SLO: 300s).
+
+      # ── SLO Compliance Below 99% ──────────────────────────────────────────
+      - alert: SLOComplianceLow
+        expr: snowflake_slo_compliance_ratio < 0.99
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SLO compliance below 99% for {{ $labels.pipeline_name }}"
+          description: >
+            SLO {{ $labels.pipeline_name }} compliance is
+            {{ $value | printf "%.2f" }} (target: >= 0.99).
+
+      # ── Error Rate Spike ──────────────────────────────────────────────────
+      - alert: PipelineErrorRateHigh
+        expr: >
+          rate(snowflake_pipeline_errors_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Pipeline errors firing on {{ $labels.pipeline_name }}"
+          description: >
+            Error type {{ $labels.error_type }} is occurring at
+            {{ $value | printf "%.2f" }} errors/second on
+            {{ $labels.pipeline_name }}.
